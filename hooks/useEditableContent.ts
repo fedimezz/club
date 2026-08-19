@@ -2,58 +2,57 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-// Use in any public page: const { t, img } = useEditableContent("activites");
-// Then replace hardcoded copy with t("heroTitle", "the current hardcoded text")
-// and hardcoded image src with img("heroImage", "/the/current/path.jpg").
-// Falls back to the given default until the Owner sets a value in
-// /admin/content, and again if fetching fails — never blocks rendering.
 export function useEditableContent(pageKey: string) {
   const [content, setContent] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    fetch(`/api/content/public/${pageKey}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (active && json?.content) setContent(json.content);
-      })
-      .catch(() => {
-        // Keep defaults on failure.
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await fetch(`/api/content/public/${encodeURIComponent(pageKey)}`, {
+        cache: "no-store",
+        signal,
+        headers: { "Cache-Control": "no-cache" },
       });
-    return () => {
-      active = false;
-    };
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json?.content && typeof json.content === "object") setContent(json.content);
+    } catch (error) {
+      if ((error as Error)?.name !== "AbortError") console.error("Editable content load failed:", error);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }, [pageKey]);
 
-  const t = useCallback(
-    (key: string, fallback: string) => {
-      const v = content[key];
-      return v && v.trim() ? v : fallback;
-    },
-    [content]
-  );
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
-  // For "gallery"-type fields: the Owner's saved value is a JSON array of
-  // photo URLs. Falls back to the given default list until set, and again
-  // if the stored value is missing/corrupt — never throws.
-  const list = useCallback(
-    (key: string, fallback: string[]): string[] => {
-      const v = content[key];
-      if (!v) return fallback;
-      try {
-        const parsed = JSON.parse(v);
-        return Array.isArray(parsed) && parsed.length > 0 ? parsed : fallback;
-      } catch {
-        return fallback;
-      }
-    },
-    [content]
-  );
+  // The admin preview saves through the same app, so allow it to explicitly
+  // invalidate the public content cache without requiring a hard refresh.
+  useEffect(() => {
+    const refresh = () => load();
+    window.addEventListener("page-content-updated", refresh);
+    return () => window.removeEventListener("page-content-updated", refresh);
+  }, [load]);
+
+  const t = useCallback((key: string, fallback: string) => {
+    const value = content[key];
+    return value && value.trim() ? value : fallback;
+  }, [content]);
+
+  const list = useCallback((key: string, fallback: string[]): string[] => {
+    const value = content[key];
+    if (!value) return fallback;
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : fallback;
+    } catch {
+      return fallback;
+    }
+  }, [content]);
 
   return { t, img: t, list, content, loading };
 }

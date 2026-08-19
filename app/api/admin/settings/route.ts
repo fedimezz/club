@@ -14,11 +14,8 @@ async function getOrCreateSettings() {
 
 export async function GET(request: NextRequest) {
   try {
-    // Admins can read the gym settings (e.g. to display working hours,
-    // contact info) even though only the Owner can change them.
     const auth = await requireAdmin(request);
     if (!auth.ok) return NextResponse.json({ error: "Accès refusé" }, { status: auth.status });
-
     const settings = await getOrCreateSettings();
     return NextResponse.json({ settings });
   } catch (error) {
@@ -34,10 +31,19 @@ export async function PUT(request: NextRequest) {
     const owner = auth.user;
 
     const rawBody = await request.json().catch(() => null);
-    const parsed = gymSettingsSchema.safeParse(rawBody);
+    // The form sends the complete settings object. Prisma returns nullable
+    // columns as null, while the validation schema uses optional fields.
+    // Normalize null -> undefined before validation so an untouched nullable
+    // field never makes an otherwise valid save fail with "Invalid input".
+    const body = rawBody && typeof rawBody === "object"
+      ? Object.fromEntries(Object.entries(rawBody as Record<string, unknown>).map(([key, value]) => [key, value === null ? undefined : value]))
+      : rawBody;
+
+    const parsed = gymSettingsSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: formatZodError(parsed.error) }, { status: 400 });
     }
+
     const {
       name, logoUrl, address, phone, email,
       workingHours, facebookUrl, instagramUrl, tiktokUrl, primaryColor,
